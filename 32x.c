@@ -692,7 +692,7 @@ void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_
 			main_sh2_next_int(mars->main);
 		}
 		if (changes & BIT_SUB_INT) {
-			sub_sh2_next_int(mars->main);
+			sub_sh2_next_int(mars->sub);
 		}
 		break;
 	case S32X_DREQ_CTRL:
