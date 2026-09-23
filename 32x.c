@@ -552,6 +552,104 @@ static uint16_t reg_write_masks[S32X_NUM_REGS] = {
 	0x0FFF
 };
 
+/* CART-ROM ARBITER (mholzinger fork, 2026-09-23, env BLASTEM_BUS_ARB=1, default off).
+ * MiSTer IF.sv ROM_ST (795-910): the 32X adapter serialises every cart access
+ * from either CPU through one state machine; an SH-2 word takes RS_IDLE ->
+ * RS_SH_WAIT -> RS_SH_READ -> RS_SH_END (~2 SH-2 clocks, burst words back to
+ * back under one grant), an MD access RS_MD_RW -> RS_MD_READ -> RS_MD_END
+ * (~3 SH-2 clocks + the board ROM wait), SH-2 first at RS_IDLE. The system
+ * registers (COMM etc.) are NOT arbitrated (IF.sv 298/486: independent
+ * always-blocks, no wait), and the VDP port is partitioned by FM. Upstream
+ * BlastEm charges each CPU its own fixed cost and never lets one wait for
+ * the other; with the knob on, a cart access from either CPU waits for the
+ * other's access in flight. Times in MCLK (53.69 MHz): SH-2 cycles are
+ * MCLK*3, 68K cycles are MCLK. */
+#define ARB_SH_WORD_MCLK  5   /* ~2.1 SH-2 clocks incl. the board ROM wait */
+#define ARB_MD_ACCESS_MCLK 8  /* ~3.4 SH-2 clocks */
+static int arb_on = -1;
+static uint32_t arb_rom_busy_until;   /* MCLK */
+static int arb_last_side = -1;        /* 0 = 68K, 1 = SH-2: a CPU never waits on its own access (burst words share one grant, IF.sv RS_SH_CONT) */
+static uint32_t arb_last_start;       /* MCLK the holder's access began: the CPUs run in slices, so an access stamped in the other's FUTURE must not be waited on */
+uint64_t arbstat[6];                  /* [0] 68K cart accesses [1] 68K wait MCLK [2] SH-2 cart words [3] SH-2 wait MCLK [4] 68K accesses that waited [5] SH-2 words that waited */
+static inline int arb_enabled(void)
+{
+	if (arb_on < 0) { const char *e = getenv("BLASTEM_BUS_ARB"); arb_on = e ? atoi(e) : 0; }
+	return arb_on;
+}
+static inline uint32_t arb_take(uint32_t now_mclk, uint32_t occupancy, int side)
+{
+	uint32_t wait = 0;
+	if ((int32_t)(arb_rom_busy_until - now_mclk) > 0) {
+		if (arb_last_side != side) {
+			if ((int32_t)(arb_last_start - now_mclk) <= 0) {
+				/* the other CPU's access already began: wait for it to finish */
+				wait = arb_rom_busy_until - now_mclk;
+				arbstat[side ? 5 : 4]++;
+			} else {
+				/* it lies in our future (slice skew): we go first, it will not see us */
+				arb_rom_busy_until = now_mclk;
+			}
+		} else {
+			/* same CPU, grant still held: the new word queues behind its own burst */
+			now_mclk = arb_rom_busy_until;
+		}
+	}
+	arbstat[side ? 3 : 1] += wait;
+	arbstat[side ? 2 : 0]++;
+	arb_last_start = now_mclk + wait;
+	arb_rom_busy_until = arb_last_start + occupancy;
+	arb_last_side = side;
+	return wait;
+}
+static uint8_t *arb_cart;             /* gen->cart as bytes (bus order words) */
+static uint32_t arb_cart_mask;
+static uint8_t *arb_bank_ptr;         /* 0x900000 window base when mapped high */
+uint16_t arb_68k_fixed_read_w(uint32_t address, void *vcontext)
+{
+	m68k_context *m68k = vcontext;
+	genesis_context *gen = m68k->system;
+	s32x *mars = gen->mars;
+	if (!(mars->regs[S32X_ADAPT_CTRL] & BIT_ADEN_M68K) || (mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_RV) || !arb_cart) {
+		return 0xFFFF;
+	}
+	m68k->cycles += arb_take(m68k->cycles, ARB_MD_ACCESS_MCLK, 0);
+	return *(uint16_t *)(arb_cart + ((address & 0x7FFFF) & arb_cart_mask));
+}
+uint8_t arb_68k_fixed_read_b(uint32_t address, void *vcontext)
+{
+	uint16_t v = arb_68k_fixed_read_w(address & ~1, vcontext);
+	return (address & 1) ? v : v >> 8;
+}
+uint16_t arb_68k_bank_read_w(uint32_t address, void *vcontext)
+{
+	m68k_context *m68k = vcontext;
+	genesis_context *gen = m68k->system;
+	s32x *mars = gen->mars;
+	if (!(mars->regs[S32X_ADAPT_CTRL] & BIT_ADEN_M68K) || (mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_RV) || !arb_bank_ptr) {
+		return 0xFFFF;
+	}
+	m68k->cycles += arb_take(m68k->cycles, ARB_MD_ACCESS_MCLK, 0);
+	return *(uint16_t *)(arb_bank_ptr + (address & 0xFFFFF));
+}
+uint8_t arb_68k_bank_read_b(uint32_t address, void *vcontext)
+{
+	uint16_t v = arb_68k_bank_read_w(address & ~1, vcontext);
+	return (address & 1) ? v : v >> 8;
+}
+static uint16_t arb_sh2_rom_read_w(uint32_t offset, void *vcontext)
+{
+	sh2_context *sh2 = vcontext;
+	s32x *mars = sh2->system;
+	uint32_t now = sh2->cycles / 3;
+	sh2->cycles += 3 * arb_take(now, ARB_SH_WORD_MCLK, 1);
+	return *(uint16_t *)(((uint8_t *)mars->rom) + offset);
+}
+static uint8_t arb_sh2_rom_read_b(uint32_t offset, void *vcontext)
+{
+	uint16_t v = arb_sh2_rom_read_w(offset & ~1, vcontext);
+	return (offset & 1) ? v : v >> 8;
+}
+
 static void check_cart_map_change(uint32_t reg, m68k_context *m68k, uint16_t changes)
 {
 	uint8_t aden_changed = reg == S32X_ADAPT_CTRL && (changes & BIT_ADEN_M68K);
@@ -562,10 +660,11 @@ static void check_cart_map_change(uint32_t reg, m68k_context *m68k, uint16_t cha
 		s32x *mars = gen->mars;
 		uint8_t cart_mapped_high = (mars->regs[S32X_ADAPT_CTRL] & BIT_ADEN_M68K) && !(mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_RV);
 		if (cart_mapped_high) {
-			mars->main->mem_pointers[0] = (uint8_t *)gen->cart;
-			mars->sub->mem_pointers[0] = (uint8_t *)gen->cart;
+			mars->main->mem_pointers[0] = arb_enabled() ? NULL : (uint8_t *)gen->cart;
+			mars->sub->mem_pointers[0] = arb_enabled() ? NULL : (uint8_t *)gen->cart;
 			m68k->mem_pointers[0] = NULL;
-			m68k->mem_pointers[1] = gen->cart;
+			m68k->mem_pointers[1] = arb_enabled() ? NULL : gen->cart;
+			arb_cart = (uint8_t *)gen->cart;
 			// This is either for SRAM with the cart mapped low or unused
 			m68k->mem_pointers[3] = NULL;
 			uint32_t bank_start = (mars->regs[S32X_CART_BANK] & S32X_BANK_MASK) << 20;
@@ -583,7 +682,8 @@ static void check_cart_map_change(uint32_t reg, m68k_context *m68k, uint16_t cha
 				gen->mapper_temp = ((uint8_t *)chunk->buffer) + offset;
 				m68k->mem_pointers[2] = NULL;
 			} else {
-				m68k->mem_pointers[2] = (uint16_t *)(((uint8_t *)chunk->buffer) + offset);
+				arb_bank_ptr = ((uint8_t *)chunk->buffer) + offset;
+				m68k->mem_pointers[2] = arb_enabled() ? NULL : (uint16_t *)(((uint8_t *)chunk->buffer) + offset);
 				gen->mapper_temp = NULL;
 			}
 		} else {
@@ -660,6 +760,7 @@ static void maybe_update_pwm_dreq(s32x *mars)
 		sh7095_clear_dreq1(mars->sub);
 	}
 }
+
 
 void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_t mask, uint16_t value)
 {
@@ -1418,6 +1519,12 @@ s32x *alloc_32x(system_media *media, uint8_t pal, uint8_t cd_boot)
 		main_map[3].buffer = media->buffer;
 		main_map[3].mask &= nearest_pow2(media->size) - 1;
 	}
+	if (arb_enabled()) {
+		main_map[3].flags |= MMAP_FUNC_NULL;
+		main_map[3].read_16 = arb_sh2_rom_read_w;
+		main_map[3].read_8 = arb_sh2_rom_read_b;
+		arb_cart_mask = main_map[3].mask;
+	}
 	main_map[5].buffer = aligned_calloc(1, main_map[5].end, 16);
 	char *main_path = tern_find_path_default(config, "system\0s32x_main_bios\0", (tern_val){.ptrval = "32X_M_BIOS.bin"}, TVAL_PTR).ptrval;
 	FILE *f = fopen(main_path, "rb");
@@ -1442,6 +1549,11 @@ s32x *alloc_32x(system_media *media, uint8_t pal, uint8_t cd_boot)
 	memmap_chunk *sub_map = calloc(num_chunks, sizeof(memmap_chunk));
 	memcpy(sub_map, base_sh2_map, sizeof(base_sh2_map));
 	sub_map[0].buffer = ret->sdram;
+	if (arb_enabled()) {
+		sub_map[3].flags |= MMAP_FUNC_NULL;
+		sub_map[3].read_16 = arb_sh2_rom_read_w;
+		sub_map[3].read_8 = arb_sh2_rom_read_b;
+	}
 	if (cd_boot) {
 		//TODO: BRAM cart support?
 		sub_map[3].flags &= ~MMAP_AUX_BUFF;

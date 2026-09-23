@@ -17,6 +17,7 @@ static void run_dumps(genesis_context *gen)
 {
 	if (gen->mars) fprintf(stderr, "DUMPSTAT main pc=%08X cycles=%u reset=%u need_reset=%u | sub pc=%08X cycles=%u reset=%u | adapt=%04X\n", gen->mars->main->pc, gen->mars->main->cycles, gen->mars->main->reset, gen->mars->main->need_reset, gen->mars->sub->pc, gen->mars->sub->cycles, gen->mars->sub->reset, gen->mars->regs[0]);
 	fprintf(stderr, "M68KSTAT pc=%06X sp=%08X cycles=%u\n", gen->m68k->pc, gen->m68k->aregs[7], gen->m68k->cycles);
+	{ extern uint64_t arbstat[6]; if (gen->mars) fprintf(stderr, "ARBSTAT 68k-cart-accesses=%llu 68k-waited=%llu 68k-wait-mclk=%llu | sh2-cart-words=%llu sh2-waited=%llu sh2-wait-mclk=%llu\n", (unsigned long long)arbstat[0], (unsigned long long)arbstat[4], (unsigned long long)arbstat[1], (unsigned long long)arbstat[2], (unsigned long long)arbstat[5], (unsigned long long)arbstat[3]); }
 	{ extern uint32_t fbxstat[8]; if (gen->mars) fprintf(stderr, "FBXSTAT 68k-fb-word-writes=%u dropped-FM1=%u FM-raised-68k=%u FM-raised-sh2=%u FM-cleared-sh2=%u FM-cleared-68k=%u byte-writes=%u byte-dropped=%u\n", fbxstat[0], fbxstat[1], fbxstat[2], fbxstat[3], fbxstat[4], fbxstat[5], fbxstat[6], fbxstat[7]); }
 	{ extern uint32_t fifostat[8]; if (gen->mars) fprintf(stderr, "FIFOSTAT 68k-writes=%u full-evicts=%u writes-68S-clear=%u sh2-reads=%u empty-reads=%u 68S-set=%u 68S-clear-68k=%u 68S-auto-clear=%u\n", fifostat[0], fifostat[1], fifostat[2], fifostat[3], fifostat[4], fifostat[5], fifostat[6], fifostat[7]); }
 	if (gen->mars) fprintf(stderr, "COMMSTAT comm0-7 %04X %04X %04X %04X %04X %04X %04X %04X sh2int=%04X\n", gen->mars->regs[S32X_COMM_0], gen->mars->regs[S32X_COMM_1], gen->mars->regs[S32X_COMM_2], gen->mars->regs[S32X_COMM_3], gen->mars->regs[S32X_COMM_4], gen->mars->regs[S32X_COMM_5], gen->mars->regs[S32X_COMM_6], gen->mars->regs[S32X_COMM_7], gen->mars->sh2_regs[S32X_SH2_INT_CTRL]);
@@ -3211,6 +3212,29 @@ static genesis_context *shared_init_gen(rom_info info, void *lock_on, uint32_t l
 	}
 	info.map = gen->header.info.map = NULL;
 
+	{
+		/* cart-ROM arbiter (mholzinger fork): route the 68K's 32X cart windows through
+		 * the arbiter hooks when BLASTEM_BUS_ARB=1; the 0x900000 chunk already falls back
+		 * to a function when its pointer is NULL, the 0x880000 chunk needs the flag */
+		const char *e = getenv("BLASTEM_BUS_ARB");
+		if (e && atoi(e)) {
+			extern uint16_t arb_68k_fixed_read_w(uint32_t, void *);
+			extern uint8_t arb_68k_fixed_read_b(uint32_t, void *);
+			extern uint16_t arb_68k_bank_read_w(uint32_t, void *);
+			extern uint8_t arb_68k_bank_read_b(uint32_t, void *);
+			for (int i = 0; i < map_chunks; i++) {
+				if (map[i].start == 0x880000 && map[i].end == 0x900000 && (map[i].flags & MMAP_PTR_IDX)) {
+					map[i].flags |= MMAP_FUNC_NULL;
+					map[i].read_16 = arb_68k_fixed_read_w;
+					map[i].read_8 = arb_68k_fixed_read_b;
+				} else if ((map[i].start == 0x900000 || map[i].start == 0x900002) && map[i].end == 0xA00000 && (map[i].flags & MMAP_PTR_IDX)) {
+					map[i].flags |= MMAP_FUNC_NULL;
+					map[i].read_16 = arb_68k_bank_read_w;
+					map[i].read_8 = arb_68k_bank_read_b;
+				}
+			}
+		}
+	}
 	m68k_options *opts = malloc(sizeof(m68k_options));
 	init_m68k_opts(opts, map, map_chunks, MCLKS_PER_68K, sync_components, int_ack);
 	if (!strcmp(tern_find_ptr_default(model, "tas", "broken"), "broken")) {
