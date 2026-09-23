@@ -7,6 +7,34 @@
 #include "segacd.h"
 #include "blastem.h"
 
+/* --dump support (2026-09-23): dump memory blocks at the -b frame exit,
+ * bytes in bus order (big-endian words), the shape ares-headless writes. */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+extern char *dump_specs[32]; extern int dump_nspecs;
+static void run_dumps(genesis_context *gen)
+{
+	if (gen->mars) fprintf(stderr, "DUMPSTAT main pc=%08X cycles=%u reset=%u need_reset=%u | sub pc=%08X cycles=%u reset=%u | adapt=%04X\n", gen->mars->main->pc, gen->mars->main->cycles, gen->mars->main->reset, gen->mars->main->need_reset, gen->mars->sub->pc, gen->mars->sub->cycles, gen->mars->sub->reset, gen->mars->regs[0]);
+	if (gen->mars) fprintf(stderr, "COMMSTAT comm0-7 %04X %04X %04X %04X %04X %04X %04X %04X sh2int=%04X\n", gen->mars->regs[S32X_COMM_0], gen->mars->regs[S32X_COMM_1], gen->mars->regs[S32X_COMM_2], gen->mars->regs[S32X_COMM_3], gen->mars->regs[S32X_COMM_4], gen->mars->regs[S32X_COMM_5], gen->mars->regs[S32X_COMM_6], gen->mars->regs[S32X_COMM_7], gen->mars->sh2_regs[S32X_SH2_INT_CTRL]);
+	for (int i = 0; i < dump_nspecs; i++) {
+		char spec[512]; strncpy(spec, dump_specs[i], sizeof spec - 1); spec[sizeof spec - 1] = 0;
+		char *reg = strtok(spec, ":"); char *a = strtok(NULL, ":"); char *l = strtok(NULL, ":"); char *f = strtok(NULL, "");
+		if (!reg || !a || !l || !f) { fprintf(stderr, "bad --dump %s\n", dump_specs[i]); continue; }
+		unsigned long addr = strtoul(a, NULL, 0), len = strtoul(l, NULL, 0);
+		uint16_t *base = NULL; unsigned long size = 0;
+		if (!strcmp(reg, "sdram")) { if (gen->mars) { base = gen->mars->sdram; size = 0x40000; } }
+		else if (!strcmp(reg, "wram")) { base = gen->work_ram; size = 0x10000; }
+		if (!base) { fprintf(stderr, "--dump: no block %s\n", reg); continue; }
+		FILE *fh = fopen(f, "wb"); if (!fh) { fprintf(stderr, "--dump: cannot open %s\n", f); continue; }
+		for (unsigned long k = 0; k < len; k++) {
+			unsigned long off = (addr + k) & (size - 1);
+			uint16_t w = base[off >> 1];
+			fputc((off & 1) ? (w & 0xFF) : (w >> 8), fh);
+		}
+		fclose(fh);
+	}
+}
 #include "nor.h"
 #include <stdlib.h>
 #include <ctype.h>
@@ -613,6 +641,7 @@ static m68k_context *sync_components(m68k_context * context, uint32_t address)
 
 		if(exit_after){
 			if (elapsed >= exit_after) {
+				run_dumps(gen);
 				exit(0);
 			} else {
 				exit_after -= elapsed;
@@ -890,6 +919,7 @@ static m68k_context* sync_components_pico(m68k_context * context, uint32_t addre
 
 		if(exit_after){
 			if (elapsed >= exit_after) {
+				run_dumps(gen);
 				exit(0);
 			} else {
 				exit_after -= elapsed;

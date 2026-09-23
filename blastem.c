@@ -52,6 +52,8 @@
 
 int headless = 0;
 int exit_after = 0;
+/* --dump region:addr:len:file (repeatable): written at the -b exit, big-endian words like ares-headless */
+char *dump_specs[32]; int dump_nspecs = 0;
 int z80_enabled = 1;
 int frame_limit = 0;
 uint8_t use_native_states = 1;
@@ -426,6 +428,15 @@ int main(int argc, char ** argv)
 	for (int i = 1; i < argc; i++) {
 		if (argv[i][0] == '-') {
 			switch(argv[i][1]) {
+			case '-':
+				if (!strcmp(argv[i], "--dump")) {
+					i++;
+					if (i >= argc) fatal_error("--dump must be followed by region:addr:len:file\n");
+					if (dump_nspecs < 32) dump_specs[dump_nspecs++] = argv[i];
+					break;
+				}
+				fatal_error("Unrecognized switch %s\n", argv[i]);
+				break;
 			case 'b':
 				i++;
 				if (i >= argc) {
