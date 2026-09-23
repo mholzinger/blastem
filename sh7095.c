@@ -20,6 +20,12 @@ static void sh7095_reset(sh2_context *sh2)
 	sh2->peripherals[SH_RSTCSR] = 0x1F;
 	sh2->peripherals[SH_BCR1 + 2] = sh2->main ? 0x03 : 0x83;
 	sh2->peripherals[SH_BCR1 + 3] = 0xF0;
+	//CCR resets to 0: cache disabled, no way lock, no purge; tags are invalid
+	sh2_set_cache_enabled(sh2, 0);
+	sh2->current_way_off = 0;
+	sh2->cache_tw = sh2->cache_od = sh2->cache_id = 0;
+	memset(sh2->cache_address, 0, sizeof(sh2->cache_address));
+	memset(sh2->cache_lru, 0, sizeof(sh2->cache_lru));
 	sh7095_periph *p = sh2->periph_state;
 	p->ocra = p->ocrb = 0xFFFF;
 	sh2->peripherals[SH_OCRH] = p->ocra >> 8;
