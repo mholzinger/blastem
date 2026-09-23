@@ -238,6 +238,9 @@ sh2_reset
 	sh2_disperse_sr
 	vbr = 0
 	sleeping = 0
+	prefetch_full = 0
+	delay_slot = 0
+	did_mem = 0
 	ocall periph_reset
 	sh2_vector_read 0
 	pc = scratch1 - 2
