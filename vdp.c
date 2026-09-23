@@ -3101,9 +3101,11 @@ static void advance_output_line(vdp_context *context)
 				is_even = !is_even;
 			}
 			context->cur_buffer = is_even ? FRAMEBUFFER_EVEN : FRAMEBUFFER_ODD;
-			context->pushed_frame = 1;
 			context->fb = NULL;
 		}
+		//headless too: otherwise the bottom-of-screen clause fires a second time
+		//each frame and every frame counter (-b, enter_debugger_frames) runs at 2x
+		context->pushed_frame = 1;
 		vdp_update_per_frame_debug(context);
 		context->h40_lines = 0;
 		context->frame++;
