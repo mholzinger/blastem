@@ -435,6 +435,18 @@ int main(int argc, char ** argv)
 					if (dump_nspecs < 32) dump_specs[dump_nspecs++] = argv[i];
 					break;
 				}
+				if (!strcmp(argv[i], "--trace-comm") || !strcmp(argv[i], "--trace-flip") || !strcmp(argv[i], "--trace-dreq")) {
+					extern FILE *trace_comm, *trace_flip, *trace_dreq;
+					const char *which = argv[i];
+					i++;
+					if (i >= argc) fatal_error("%s must be followed by a file name\n", which);
+					FILE *f = fopen(argv[i], "w");
+					if (!f) fatal_error("cannot open %s\n", argv[i]);
+					if (!strcmp(which, "--trace-comm")) { trace_comm = f; fprintf(f, "frame,source,comm,value,v,h\n"); }
+					else if (!strcmp(which, "--trace-flip")) { trace_flip = f; fprintf(f, "frame,event,source,select,vcounter,deferred\n"); }
+					else { trace_dreq = f; fprintf(f, "frame,event,source,value,v,h\n"); }
+					break;
+				}
 				fatal_error("Unrecognized switch %s\n", argv[i]);
 				break;
 			case 'b':

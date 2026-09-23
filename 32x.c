@@ -6,6 +6,38 @@
 /* FIFOSTAT (mholzinger fork, diagnostic): DREQ FIFO event counts, printed by run_dumps */
 uint32_t fifostat[8];
 uint32_t fbxstat[8]; /* [0] 68K FB word writes [1] dropped (FM=1) [2] FM raised by 68K [3] FM raised by SH-2 [4] FM cleared by SH-2 [5] FM cleared by 68K [6] 68K FB byte writes [7] byte writes dropped */ /* [0] 68K fifo writes [1] writes while FULL (oldest evicted) [2] writes with 68S clear (ignored) [3] SH-2 fifo reads [4] reads while empty/68S clear (returned 0) [5] 68S set [6] 68S clear by 68K [7] 68S auto-clear (LEN=0) */
+/* TRACE HOOKS (mholzinger fork, 2026-09-23): --trace-comm / --trace-flip / --trace-dreq FILE,
+ * ares-headless's columns so the two emulators diff directly:
+ *   comm: frame,source,comm,value,v,h        source m68k/shm/shs
+ *   flip: frame,event,source,select,vcounter,deferred   write rows = FS write requests, flip rows = the change
+ *   dreq: frame,event,source,value,v,h       start/push/miss/read/end
+ * v,h are the MD VDP beam at the event (BlastEm: vcounter, hslot*2). */
+#include "vdp.h"
+FILE *trace_comm, *trace_flip, *trace_dreq;
+uint32_t s32x_trace_frame;
+vdp_context *s32x_trace_vdp;
+const char *s32x_trace_src = "m68k";
+static inline void trace_vh(uint32_t *v, uint32_t *h)
+{
+	*v = s32x_trace_vdp ? s32x_trace_vdp->vcounter : 0;
+	*h = s32x_trace_vdp ? (uint32_t)s32x_trace_vdp->hslot * 2 : 0;
+}
+static inline void trace_comm_row(const char *src, uint32_t comm, uint16_t value)
+{
+	uint32_t v, h; trace_vh(&v, &h);
+	fprintf(trace_comm, "%u,%s,%u,0x%04x,0x%03x,0x%02x\n", s32x_trace_frame, src, comm, value, v, h);
+}
+static inline void trace_dreq_row(const char *event, const char *src, uint32_t value)
+{
+	uint32_t v, h; trace_vh(&v, &h);
+	fprintf(trace_dreq, "%u,%s,%s,%u,0x%03x,0x%02x\n", s32x_trace_frame, event, src, value, v, h);
+}
+void s32x_trace_flip_row(const char *event, const char *src, uint32_t select, uint32_t vcounter, uint32_t deferred)
+{
+	if (!trace_flip) return;
+	fprintf(trace_flip, "%u,%s,%s,%u,%u,%u\n", s32x_trace_frame, event, src, select, vcounter, deferred);
+}
+
 #include "sh7095.h"
 #include "genesis.h"
 #include "sega_mapper.h"
@@ -484,6 +516,7 @@ uint16_t s32x_sh2_read(uint32_t address, void *vcontext)
 			if (mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_68S) {
 				if ((mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_FULL) || mars->dreq_fifo_write != mars->dreq_fifo_read) {
 					uint16_t value = mars->dreq_fifo[mars->dreq_fifo_read++];
+					if (trace_dreq) trace_dreq_row("read", sh2->main ? "shm" : "shs", value);
 					mars->dreq_fifo_read &= 0x7;
 					mars->regs[S32X_DREQ_CTRL] &= ~BIT_DREQ_FULL;
 					mars->regs[S32X_DREQ_LEN]--;
@@ -495,6 +528,7 @@ uint16_t s32x_sh2_read(uint32_t address, void *vcontext)
 					}
 					if (!mars->regs[S32X_DREQ_LEN]) {
 						fifostat[7]++;
+						if (trace_dreq) trace_dreq_row("end", sh2->main ? "shm" : "shs", 0);
 						mars->regs[S32X_DREQ_CTRL] &= ~BIT_DREQ_68S;
 					}
 					return value;
@@ -803,6 +837,7 @@ void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_
 	case S32X_DREQ_CTRL:
 		//RV changes handled below
 		if (changes & BIT_DREQ_68S) {
+			if (trace_dreq) trace_dreq_row((new & BIT_DREQ_68S) ? "start" : "end", "m68k", (new & BIT_DREQ_68S) ? mars->regs[S32X_DREQ_LEN] : 0);
 			if (old & BIT_DREQ_68S) {
 				fifostat[6]++;
 				//unclear if FIFO is emptied, or if the full bit is just suppressed
@@ -826,12 +861,14 @@ void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_
 		//TODO: test what happens if you write to this when 68S is 0
 		fifostat[0]++;
 		if (!(mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_68S)) fifostat[2]++;
+		if (trace_dreq) trace_dreq_row((mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_68S) ? "push" : "miss", "m68k", value);
 		if (mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_68S) {
 			mars->dreq_fifo[mars->dreq_fifo_write++] = value;
 			mars->dreq_fifo_write &= 0x7;
 			if (mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_FULL) {
 				//treating this like the PWM FIFO and evicting the oldest word for now
 				fifostat[1]++;
+				if (trace_dreq) trace_dreq_row("miss", "m68k", mars->dreq_fifo[mars->dreq_fifo_read]);
 				mars->dreq_fifo_read++;
 				mars->dreq_fifo_read &= 0x7;
 				
@@ -858,6 +895,7 @@ void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_
 		maybe_update_pwm_dreq(mars);
 		return;
 	}
+	if (trace_comm && reg >= S32X_COMM_0 && reg <= S32X_COMM_7) trace_comm_row("m68k", reg - S32X_COMM_0, new);
 	mars->regs[reg] = new;
 	check_cart_map_change(reg, m68k, changes);
 }
@@ -879,6 +917,7 @@ void *s32x_68k_write(uint32_t address, void *vcontext, uint16_t value)
 			return vcontext;
 		}
 		gen->bus_busy = 1;
+		s32x_trace_src = "m68k";
 		for (;;)
 		{
 			s32x_run(mars, m68k->cycles);
@@ -1087,6 +1126,7 @@ static void s32x_sh2_sysreg_write(uint32_t reg, sh2_context *sh2, s32x *mars, ui
 		s32x_pwm_run(mars, sh2->cycles);
 		break;
 	}
+	if (trace_comm && reg >= S32X_COMM_0 && reg <= S32X_COMM_7) trace_comm_row(sh2->main ? "shm" : "shs", reg - S32X_COMM_0, new);
 	base[reg] = new;
 }
 
@@ -1108,6 +1148,7 @@ void *s32x_sh2_write(uint32_t address, void *vcontext, uint16_t value)
 		//have occasionally seen the writes be delayed, but not consistent
 		//needs more testing
 		sh2->cycles += 6 * sh2->opts->gen.clock_divider;
+		s32x_trace_src = sh2->main ? "shm" : "shs";
 		for (;;)
 		{
 			if (sh2->main) {

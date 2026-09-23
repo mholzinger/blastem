@@ -4,6 +4,8 @@
 #include "32x_video.h"
 #include "vdp.h"
 #include "render.h"
+extern void s32x_trace_flip_row(const char *event, const char *src, uint32_t select, uint32_t vcounter, uint32_t deferred);
+extern const char *s32x_trace_src;
 
 #ifdef DO_DEBUG_PRINT
 #define dprintf printf
@@ -141,6 +143,7 @@ void s32x_video_run(s32x_video *vid, uint32_t target)
 						vid->front = vid->back;
 						vid->back = tmp;
 						vid->regs[S32X_VID_FB_CTRL] ^= S32X_VID_BIT_FS;
+						s32x_trace_flip_row("flip", "vdp", vid->regs[S32X_VID_FB_CTRL] & S32X_VID_BIT_FS, vid->vcounter, 1);
 					}
 				}
 			} else {
@@ -155,6 +158,7 @@ void s32x_video_run(s32x_video *vid, uint32_t target)
 						vid->front = vid->back;
 						vid->back = tmp;
 						vid->regs[S32X_VID_FB_CTRL] ^= S32X_VID_BIT_FS;
+						s32x_trace_flip_row("flip", "vdp", vid->regs[S32X_VID_FB_CTRL] & S32X_VID_BIT_FS, vid->vcounter, 1);
 					}
 				}
 			}
@@ -563,11 +567,14 @@ uint32_t s32x_video_68k_write(uint32_t address, s32x_video *video, uint16_t valu
 		uint16_t changed = old ^ new;
 		if (reg == S32X_VID_FB_CTRL && (changed & S32X_VID_BIT_FS)) {
 			if (old & S32X_VID_BIT_VBLK || !(video->regs[S32X_VID_MODE] & S32X_VID_MODE_MASK)) {
+				s32x_trace_flip_row("write", s32x_trace_src, new & S32X_VID_BIT_FS, video->vcounter, 0);
 				uint8_t *tmp = video->front;
 				video->front = video->back;
 				video->back = tmp;
 				video->flip_pending = 0;
+				s32x_trace_flip_row("flip", "vdp", new & S32X_VID_BIT_FS, video->vcounter, 0);
 			} else {
+				s32x_trace_flip_row("write", s32x_trace_src, new & S32X_VID_BIT_FS, video->vcounter, 1);
 				video->flip_pending = 1;
 				new &= ~S32X_VID_BIT_FS;
 				new |= old & S32X_VID_BIT_FS;
@@ -608,11 +615,14 @@ uint32_t s32x_video_68k_write_b(uint32_t address, s32x_video *video, uint16_t va
 		uint16_t changed = old ^ new;
 		if (reg == S32X_VID_FB_CTRL && (changed & S32X_VID_BIT_FS)) {
 			if (old & S32X_VID_BIT_VBLK || !(video->regs[S32X_VID_MODE] & S32X_VID_MODE_MASK)) {
+				s32x_trace_flip_row("write", s32x_trace_src, new & S32X_VID_BIT_FS, video->vcounter, 0);
 				uint8_t *tmp = video->front;
 				video->front = video->back;
 				video->back = tmp;
 				video->flip_pending = 0;
+				s32x_trace_flip_row("flip", "vdp", new & S32X_VID_BIT_FS, video->vcounter, 0);
 			} else {
+				s32x_trace_flip_row("write", s32x_trace_src, new & S32X_VID_BIT_FS, video->vcounter, 1);
 				video->flip_pending = 1;
 				new &= ~S32X_VID_BIT_FS;
 				new |= old & S32X_VID_BIT_FS;
@@ -644,11 +654,14 @@ uint32_t s32x_video_sh2_write(uint32_t address, s32x_video *video, uint16_t valu
 		uint16_t changed = old ^ new;
 		if (reg == S32X_VID_FB_CTRL && (changed & S32X_VID_BIT_FS)) {
 			if (old & S32X_VID_BIT_VBLK || !(video->regs[S32X_VID_MODE] & S32X_VID_MODE_MASK)) {
+				s32x_trace_flip_row("write", s32x_trace_src, new & S32X_VID_BIT_FS, video->vcounter, 0);
 				uint8_t *tmp = video->front;
 				video->front = video->back;
 				video->back = tmp;
 				video->flip_pending = 0;
+				s32x_trace_flip_row("flip", "vdp", new & S32X_VID_BIT_FS, video->vcounter, 0);
 			} else {
+				s32x_trace_flip_row("write", s32x_trace_src, new & S32X_VID_BIT_FS, video->vcounter, 1);
 				video->flip_pending = 1;
 				new &= ~S32X_VID_BIT_FS;
 				new |= old & S32X_VID_BIT_FS;
@@ -688,11 +701,14 @@ uint32_t s32x_video_sh2_write_b(uint32_t address, s32x_video *video, uint8_t val
 		uint16_t changed = old ^ new;
 		if (reg == S32X_VID_FB_CTRL && (changed & S32X_VID_BIT_FS)) {
 			if (old & S32X_VID_BIT_VBLK || !(video->regs[S32X_VID_MODE] & S32X_VID_MODE_MASK)) {
+				s32x_trace_flip_row("write", s32x_trace_src, new & S32X_VID_BIT_FS, video->vcounter, 0);
 				uint8_t *tmp = video->front;
 				video->front = video->back;
 				video->back = tmp;
 				video->flip_pending = 0;
+				s32x_trace_flip_row("flip", "vdp", new & S32X_VID_BIT_FS, video->vcounter, 0);
 			} else {
+				s32x_trace_flip_row("write", s32x_trace_src, new & S32X_VID_BIT_FS, video->vcounter, 1);
 				video->flip_pending = 1;
 				new &= ~S32X_VID_BIT_FS;
 				new |= old & S32X_VID_BIT_FS;
