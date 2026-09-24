@@ -152,8 +152,14 @@ uint32_t sh2_cache_fill(uint32_t address, sh2_context *sh2, uint32_t tag, uint32
 	}
 }
 
+
+/* CACHESTAT (mholzinger fork, 2026-09-24): SH-2 cache activity per CPU, printed at the -b exit.
+ * [cpu][0] cached-area reads (8/16/32) [1] line fills for instruction fetch (address == pc)
+ * [2] line fills for data [3] reads that bypassed the cache (ID/OD set). cpu: 0 = slave, 1 = master. */
+uint64_t cachestat[2][4];
 uint8_t sh2_cached_read_8(uint32_t address, sh2_context *sh2)
 {
+	cachestat[sh2->main & 1][0]++;
 	uint32_t tag = (address & 0x1FFFFC00) | 4;
 	uint32_t way_off = (address >> 4 & 0x3F) | 0xC0;
 	uint32_t ret;
@@ -192,10 +198,15 @@ uint8_t sh2_cached_read_8(uint32_t address, sh2_context *sh2)
 	if (address == sh2->pc) {
 		//TODO: more definitive way to distinguish instruction fetch
 		if (sh2->cache_id) {
+			cachestat[sh2->main & 1][3]++;
 			return sh2->read8[1](address, sh2);
 		}
+		cachestat[sh2->main & 1][1]++;
 	} else if (sh2->cache_od) {
+		cachestat[sh2->main & 1][3]++;
 		return sh2->read8[1](address, sh2);
+	} else {
+		cachestat[sh2->main & 1][2]++;
 	}
 	ret = sh2_cache_fill(address, sh2, tag, way_off);
 hit:
@@ -210,6 +221,7 @@ hit:
 
 uint16_t sh2_cached_read_16(uint32_t address, sh2_context *sh2)
 {
+	cachestat[sh2->main & 1][0]++;
 	uint32_t tag = (address & 0x1FFFFC00) | 4;
 	uint32_t way_off = (address >> 4 & 0x3F) | 0xC0;
 	uint32_t ret;
@@ -248,10 +260,15 @@ uint16_t sh2_cached_read_16(uint32_t address, sh2_context *sh2)
 	if (address == sh2->pc) {
 		//TODO: more definitive way to distinguish instruction fetch
 		if (sh2->cache_id) {
+			cachestat[sh2->main & 1][3]++;
 			return sh2->read16[1](address, sh2);
 		}
+		cachestat[sh2->main & 1][1]++;
 	} else if (sh2->cache_od) {
+		cachestat[sh2->main & 1][3]++;
 		return sh2->read16[1](address, sh2);
+	} else {
+		cachestat[sh2->main & 1][2]++;
 	}
 	ret = sh2_cache_fill(address, sh2, tag, way_off);
 hit:
@@ -263,6 +280,7 @@ hit:
 
 uint32_t sh2_cached_read_32(uint32_t address, sh2_context *sh2)
 {
+	cachestat[sh2->main & 1][0]++;
 	uint32_t tag = (address & 0x1FFFFC00) | 4;
 	uint32_t way_off = (address >> 4 & 0x3F) | 0xC0;
 	if (sh2->cache_address[way_off] == tag) {
@@ -296,10 +314,15 @@ uint32_t sh2_cached_read_32(uint32_t address, sh2_context *sh2)
 	if (address == sh2->pc) {
 		//TODO: more definitive way to distinguish instruction fetch
 		if (sh2->cache_id) {
+			cachestat[sh2->main & 1][3]++;
 			return sh2->read32[1](address, sh2);
 		}
+		cachestat[sh2->main & 1][1]++;
 	} else if (sh2->cache_od) {
+		cachestat[sh2->main & 1][3]++;
 		return sh2->read32[1](address, sh2);
+	} else {
+		cachestat[sh2->main & 1][2]++;
 	}
 	return sh2_cache_fill(address, sh2, tag, way_off);
 }
