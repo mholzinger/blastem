@@ -430,17 +430,13 @@ uint16_t s32x_68k_read(uint32_t address, void *vcontext)
 		}
 		return mars->regs[reg];
 	} else if (address >= 0xA15180) {
-		while (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
-			gen->bus_busy = 1;
-			//FIXME: make this continue exactly when FM Is flipped
-			m68k->cycles += MAX_SH2_CYCLES / 3;
-#ifdef NEW_CORE
-			m68k->sync_components(m68k, 0);
-#else
-			m68k->opts->sync_components(m68k, 0);
-#endif
+		//FM=1: the adapter completes the 68K cycle at once with no VDP access
+		//(MiSTer IF.sv MD_VDP_SEL && ADCR.FM -> VDP_DTACK_N <= 0). The old
+		//spin held the 68K for the whole SH-2 window on every VDP register
+		//read made under FM (a rom that polls FS at 0xA1518A starves).
+		if (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
+			return 0xFFFF;
 		}
-		gen->bus_busy = 0;
 		return s32x_video_68k_read(address, &mars->video);
 	}
 	return 0xFFFF;
@@ -1162,17 +1158,13 @@ uint16_t s32x_fb_read_w(uint32_t address, void *vcontext)
 	genesis_context *gen = m68k->system;
 	s32x *mars = gen->mars;
 	s32x_run(mars, m68k->cycles);
-	while (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
-		gen->bus_busy = 1;
-		//FIXME: make this continue exactly when FM Is flipped
-		m68k->cycles += MAX_SH2_CYCLES / 3;
-#ifdef NEW_CORE
-		m68k->sync_components(m68k, 0);
-#else
-		m68k->opts->sync_components(m68k, 0);
-#endif
+	//FM=1: the adapter completes the 68K cycle at once with no VDP access
+	//(MiSTer IF.sv: MD_VDP_SEL && ADCR.FM -> VDP_DTACK_N <= 0; ares returns
+	//open bus). Stalling here until FM drops held the 68K for whole SH-2
+	//windows and froze the game on roms that read the FB under FM.
+	if (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
+		return 0xFFFF;
 	}
-	gen->bus_busy = 0;
 	return s32x_video_fb_read_w(address, &mars->video);
 }
 
@@ -1269,17 +1261,10 @@ void *s32x_overwrite_write_w(uint32_t address, void *vcontext, uint16_t value)
 	genesis_context *gen = m68k->system;
 	s32x *mars = gen->mars;
 	s32x_run(mars, m68k->cycles);
-	while (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
-		gen->bus_busy = 1;
-		//FIXME: make this continue exactly when FM Is flipped
-		m68k->cycles += MAX_SH2_CYCLES / 3;
-#ifdef NEW_CORE
-		m68k->sync_components(m68k, 0);
-#else
-		m68k->opts->sync_components(m68k, 0);
-#endif
+	//FM=1: cycle completes at once, no VDP access (IF.sv); never stall the 68K here
+	if (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
+		return vcontext;
 	}
-	gen->bus_busy = 0;
 	s32x_video_overwrite_write_w(address, &mars->video, value);
 	return vcontext;
 }
@@ -1290,17 +1275,10 @@ void *s32x_overwrite_write_b(uint32_t address, void *vcontext, uint8_t value)
 	genesis_context *gen = m68k->system;
 	s32x *mars = gen->mars;
 	s32x_run(mars, m68k->cycles);
-	while (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
-		gen->bus_busy = 1;
-		//FIXME: make this continue exactly when FM Is flipped
-		m68k->cycles += MAX_SH2_CYCLES / 3;
-#ifdef NEW_CORE
-		m68k->sync_components(m68k, 0);
-#else
-		m68k->opts->sync_components(m68k, 0);
-#endif
+	//FM=1: cycle completes at once, no VDP access (IF.sv); never stall the 68K here
+	if (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
+		return vcontext;
 	}
-	gen->bus_busy = 0;
 	s32x_video_overwrite_write_b(address, &mars->video, value);
 	return vcontext;
 }
