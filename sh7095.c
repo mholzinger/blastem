@@ -551,7 +551,11 @@ static void sh7095_write_byte(uint32_t reg, sh2_context *sh2, uint8_t value)
 		sh2->cache_od = value & BIT_CCR_OD;
 		sh2->cache_id = value & BIT_CCR_ID;
 		if (changes & BIT_CCR_CE) {
-			sh2_set_cache_enabled(sh2, value & BIT_CCR_CE);
+			//diagnostic knob (mholzinger fork): BLASTEM_SH2_NOCACHE=1 keeps the
+			//cache disabled whatever CCR says, to bisect cache-coherence effects
+			static int nocache = -1;
+			if (nocache < 0) { const char *e = getenv("BLASTEM_SH2_NOCACHE"); nocache = e ? atoi(e) : 0; }
+			sh2_set_cache_enabled(sh2, nocache ? 0 : (value & BIT_CCR_CE));
 		}
 		if (value & BIT_CCR_CP) {
 			memset(sh2->cache_lru, 0, sizeof(sh2->cache_lru));

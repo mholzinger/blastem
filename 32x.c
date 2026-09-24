@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "32x.h"
+
+/* FIFOSTAT (mholzinger fork, diagnostic): DREQ FIFO event counts, printed by run_dumps */
+uint32_t fifostat[8];
+uint32_t fbxstat[8]; /* [0] 68K FB word writes [1] dropped (FM=1) [2] FM raised by 68K [3] FM raised by SH-2 [4] FM cleared by SH-2 [5] FM cleared by 68K [6] 68K FB byte writes [7] byte writes dropped */ /* [0] 68K fifo writes [1] writes while FULL (oldest evicted) [2] writes with 68S clear (ignored) [3] SH-2 fifo reads [4] reads while empty/68S clear (returned 0) [5] 68S set [6] 68S clear by 68K [7] 68S auto-clear (LEN=0) */
 #include "sh7095.h"
 #include "genesis.h"
 #include "sega_mapper.h"
@@ -476,6 +480,7 @@ uint16_t s32x_sh2_read(uint32_t address, void *vcontext)
 		case S32X_DREQ_FIFO:
 			//TODO: test what happens if you read from an empty FIFO
 			//TODO: test what happens if you read from the FIFO with 68S=0
+			fifostat[3]++;
 			if (mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_68S) {
 				if ((mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_FULL) || mars->dreq_fifo_write != mars->dreq_fifo_read) {
 					uint16_t value = mars->dreq_fifo[mars->dreq_fifo_read++];
@@ -489,11 +494,13 @@ uint16_t s32x_sh2_read(uint32_t address, void *vcontext)
 						sh7095_clear_dreq0(mars->sub);
 					}
 					if (!mars->regs[S32X_DREQ_LEN]) {
+						fifostat[7]++;
 						mars->regs[S32X_DREQ_CTRL] &= ~BIT_DREQ_68S;
 					}
 					return value;
 				}
 			}
+			fifostat[4]++;
 			return 0;
 		case S32X_PWM_WIDTH_M:
 			s32x_pwm_run(mars, sh2->cycles);
@@ -679,6 +686,7 @@ void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_
 			}
 		}
 		if (changes & BIT_ADCT_FM) {
+			if (new & BIT_ADCT_FM) fbxstat[2]++; else fbxstat[5]++;
 			mars->sh2_regs[S32X_SH2_INT_CTRL] &= ~BIT_ADCT_FM;
 			mars->sh2_regs[S32X_SH2_INT_CTRL] |= new & BIT_ADCT_FM;
 		}
@@ -695,6 +703,7 @@ void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_
 		//RV changes handled below
 		if (changes & BIT_DREQ_68S) {
 			if (old & BIT_DREQ_68S) {
+				fifostat[6]++;
 				//unclear if FIFO is emptied, or if the full bit is just suppressed
 				new &= ~BIT_DREQ_FULL;
 				mars->dreq_fifo_write = mars->dreq_fifo_read = 0;
@@ -704,6 +713,7 @@ void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_
 				sh7095_assert_dreq0(mars->main);
 				sh7095_assert_dreq0(mars->sub);
 			}
+			if (!(old & BIT_DREQ_68S)) fifostat[5]++;
 		}
 		break;
 	case S32X_DREQ_LEN:	
@@ -713,11 +723,14 @@ void s32x_68k_sysreg_write(uint32_t reg, m68k_context *m68k, s32x *mars, uint16_
 	case S32X_DREQ_FIFO:
 		//TODO: test what happens when you write to a full FIFO
 		//TODO: test what happens if you write to this when 68S is 0
+		fifostat[0]++;
+		if (!(mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_68S)) fifostat[2]++;
 		if (mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_68S) {
 			mars->dreq_fifo[mars->dreq_fifo_write++] = value;
 			mars->dreq_fifo_write &= 0x7;
 			if (mars->regs[S32X_DREQ_CTRL] & BIT_DREQ_FULL) {
 				//treating this like the PWM FIFO and evicting the oldest word for now
+				fifostat[1]++;
 				mars->dreq_fifo_read++;
 				mars->dreq_fifo_read &= 0x7;
 				
@@ -869,6 +882,7 @@ static void s32x_sh2_sysreg_write(uint32_t reg, sh2_context *sh2, s32x *mars, ui
 	{
 	case S32X_SH2_INT_CTRL:
 		if (changes & BIT_ADCT_FM) {
+			if (new & BIT_ADCT_FM) fbxstat[3]++; else fbxstat[4]++;
 			mars->regs[S32X_ADAPT_CTRL] &= ~BIT_ADCT_FM;
 			mars->regs[S32X_ADAPT_CTRL] |= new & BIT_ADCT_FM;
 		}
@@ -1129,8 +1143,10 @@ void *s32x_fb_write_w(uint32_t address, void *vcontext, uint16_t value)
 	genesis_context *gen = m68k->system;
 	s32x *mars = gen->mars;
 	s32x_run(mars, m68k->cycles);
+	fbxstat[0]++;
 	if (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
 		//TODO: confirm that this actually behaves like register writes
+		fbxstat[1]++;
 		return vcontext;
 	}
 	s32x_video_fb_write_w(address, &mars->video, value);
@@ -1143,8 +1159,10 @@ void *s32x_fb_write_b(uint32_t address, void *vcontext, uint8_t value)
 	genesis_context *gen = m68k->system;
 	s32x *mars = gen->mars;
 	s32x_run(mars, m68k->cycles);
+	fbxstat[6]++;
 	if (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
 		//TODO: confirm that this actually behaves like register writes
+		fbxstat[7]++;
 		return vcontext;
 	}
 	//byte writes behave as if they were written to the overwrite area

@@ -16,6 +16,9 @@ extern char *dump_specs[32]; extern int dump_nspecs;
 static void run_dumps(genesis_context *gen)
 {
 	if (gen->mars) fprintf(stderr, "DUMPSTAT main pc=%08X cycles=%u reset=%u need_reset=%u | sub pc=%08X cycles=%u reset=%u | adapt=%04X\n", gen->mars->main->pc, gen->mars->main->cycles, gen->mars->main->reset, gen->mars->main->need_reset, gen->mars->sub->pc, gen->mars->sub->cycles, gen->mars->sub->reset, gen->mars->regs[0]);
+	fprintf(stderr, "M68KSTAT pc=%06X sp=%08X cycles=%u\n", gen->m68k->pc, gen->m68k->aregs[7], gen->m68k->cycles);
+	{ extern uint32_t fbxstat[8]; if (gen->mars) fprintf(stderr, "FBXSTAT 68k-fb-word-writes=%u dropped-FM1=%u FM-raised-68k=%u FM-raised-sh2=%u FM-cleared-sh2=%u FM-cleared-68k=%u byte-writes=%u byte-dropped=%u\n", fbxstat[0], fbxstat[1], fbxstat[2], fbxstat[3], fbxstat[4], fbxstat[5], fbxstat[6], fbxstat[7]); }
+	{ extern uint32_t fifostat[8]; if (gen->mars) fprintf(stderr, "FIFOSTAT 68k-writes=%u full-evicts=%u writes-68S-clear=%u sh2-reads=%u empty-reads=%u 68S-set=%u 68S-clear-68k=%u 68S-auto-clear=%u\n", fifostat[0], fifostat[1], fifostat[2], fifostat[3], fifostat[4], fifostat[5], fifostat[6], fifostat[7]); }
 	if (gen->mars) fprintf(stderr, "COMMSTAT comm0-7 %04X %04X %04X %04X %04X %04X %04X %04X sh2int=%04X\n", gen->mars->regs[S32X_COMM_0], gen->mars->regs[S32X_COMM_1], gen->mars->regs[S32X_COMM_2], gen->mars->regs[S32X_COMM_3], gen->mars->regs[S32X_COMM_4], gen->mars->regs[S32X_COMM_5], gen->mars->regs[S32X_COMM_6], gen->mars->regs[S32X_COMM_7], gen->mars->sh2_regs[S32X_SH2_INT_CTRL]);
 	for (int i = 0; i < dump_nspecs; i++) {
 		char spec[512]; strncpy(spec, dump_specs[i], sizeof spec - 1); spec[sizeof spec - 1] = 0;
