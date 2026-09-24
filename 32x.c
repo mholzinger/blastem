@@ -1174,20 +1174,26 @@ uint8_t s32x_fb_read_b(uint32_t address, void *vcontext)
 	genesis_context *gen = m68k->system;
 	s32x *mars = gen->mars;
 	s32x_run(mars, m68k->cycles);
-	while (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
-		gen->bus_busy = 1;
-		//FIXME: make this continue exactly when FM Is flipped
-		m68k->cycles += MAX_SH2_CYCLES / 3;
-#ifdef NEW_CORE
-		m68k->sync_components(m68k, 0);
-#else
-		m68k->opts->sync_components(m68k, 0);
-#endif
+	if (mars->regs[S32X_ADAPT_CTRL] & BIT_ADCT_FM) {
+		return 0xFF;
 	}
-	gen->bus_busy = 0;
 	return s32x_video_fb_read_b(address, &mars->video);
 }
 
+
+/* Calibration knob (mholzinger fork, 2026-09-23): SH-2 clocks charged per
+ * 16-bit framebuffer write by either SH-2. Upstream charges nothing; ares
+ * charges ~6.8/word (13.6 a longword, LOOP.md 20); the FPGA measured ~1.6x
+ * ares on the same rom. Env BLASTEM_FB_WAIT, default 0 = upstream. */
+static int32_t fb_wait_clocks = -1;
+static inline void charge_fb_write(sh2_context *sh2)
+{
+	if (fb_wait_clocks < 0) {
+		const char *e = getenv("BLASTEM_FB_WAIT");
+		fb_wait_clocks = e ? atoi(e) : 0;
+	}
+	sh2->cycles += fb_wait_clocks * sh2->opts->gen.clock_divider;
+}
 void *s32x_sh2_fb_write_w(uint32_t address, void *vcontext, uint16_t value)
 {
 	sh2_context *sh2 = vcontext;
@@ -1201,6 +1207,7 @@ void *s32x_sh2_fb_write_w(uint32_t address, void *vcontext, uint16_t value)
 		return vcontext;
 	}
 	s32x_video_run(&mars->video, sh2->cycles / 3);
+	charge_fb_write(sh2);
 	s32x_video_fb_write_w(address, &mars->video, value);
 	return vcontext;
 }
@@ -1219,6 +1226,7 @@ void *s32x_sh2_fb_write_b(uint32_t address, void *vcontext, uint8_t value)
 	}
 	s32x_video_run(&mars->video, sh2->cycles / 3);
 	//byte writes behave as if they were written to the overwrite area
+	charge_fb_write(sh2);
 	s32x_video_overwrite_write_b(address, &mars->video, value);
 	return vcontext;
 }
@@ -1296,6 +1304,7 @@ void *s32x_sh2_overwrite_write_w(uint32_t address, void *vcontext, uint16_t valu
 		return vcontext;
 	}
 	s32x_video_run(&mars->video, sh2->cycles / 3);
+	charge_fb_write(sh2);
 	s32x_video_overwrite_write_w(address, &mars->video, value);
 	return vcontext;
 }
@@ -1313,6 +1322,7 @@ void *s32x_sh2_overwrite_write_b(uint32_t address, void *vcontext, uint8_t value
 		return vcontext;
 	}
 	s32x_video_run(&mars->video, sh2->cycles / 3);
+	charge_fb_write(sh2);
 	s32x_video_overwrite_write_b(address, &mars->video, value);
 	return vcontext;
 }
